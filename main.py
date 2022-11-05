@@ -1,4 +1,6 @@
 import sys
+import os
+import subprocess
 import xml.etree.ElementTree as ET
 
 SS = "\\"
@@ -23,11 +25,8 @@ def eprint(*args, **kwargs):
 def parse_mpd(file_path, unique_id):
 	input_root = ET.parse(file_path).getroot()
 
-	# choose child node named 'Period'
-	period = input_root[0]
-
 	# keep all adaptation sets
-	adaptation_sets = list(period)
+	adaptation_sets = list(input_root[0])
 
 	# empty dict to keep AdaptationSet's id as key and Representation(s) inside that AdaptationSet as value
 	representations_dict = dict()
@@ -54,7 +53,8 @@ def parse_server_log(file_path, run_setup):
 					parsed = line.split()
 					if parsed[2].find("mpd") != -1:
 						run_count += 1
-					file_name = parsed[2].split(SLASH)[3][:-1]
+					file_name = parsed[2].split(SLASH)[3]
+					file_name = file_name[:-6]  # remove trash bytes from file_name
 					files.append(file_name)
 				except:
 					eprint("segment_bytes caused exception", file_path)
@@ -62,10 +62,31 @@ def parse_server_log(file_path, run_setup):
 	return run_count, files
 
 
-def calculate_video_size(video_path, files):
+def calculate_video_size(video_path, output_path, files):
+	sizes = {
+		"ftyp": 0,
+		"styp": 0,
+		"moof": 0,
+		"moov": 0,
+		"mdat": 0,
+		"imda": 0,
+	}
 	for file_name in files:
 		file_path = video_path + SS + file_name
-		print(file_path)
+		xml_file_path = video_path + SS + file_name[:-4] + "_info.xml"
+
+		if file_name.find("mpd") != -1 or file_name.find("base.init") != -1:
+			continue
+
+		if not os.path.isfile(xml_file_path):
+			os.system("mp4box.exe {} -diso".format(file_path))
+		input_root = ET.parse(xml_file_path).getroot()
+
+		for box in input_root:
+			box_name = box.get('Type')
+			if box_name in sizes:
+				sizes[box_name] += int(box.get('Size'))
+	print(sizes)
 
 
 def collect_downloaded_segments(file_name):
@@ -90,10 +111,14 @@ def collect_downloaded_segments(file_name):
 
 
 if __name__ == '__main__':
-	video_path = VIDEOS + SS + VIDEO_NAME + SS + TILES[0] + SS + PROFILES[0]
-	server_log_path = LOGS + SS + SERVER_LOG
-	setup = TILES[0] + SLASH + PROFILES[0]
+	tile = 0
+	profile = 0
 
-	parse_mpd(video_path + SS + MPD_NAMES[0], MPD_UNIQUE_IDS[0])
+	video_path = VIDEOS + SS + VIDEO_NAME + SS + TILES[tile] + SS + PROFILES[profile]
+	output_path = VIDEOS + SS + VIDEO_NAME + SS + TILES[tile] + SS + PROFILES[profile]
+	server_log_path = LOGS + SS + SERVER_LOG
+	setup = TILES[tile] + SLASH + PROFILES[profile]
+
+	# parse_mpd(video_path + SS + MPD_NAMES[profile], MPD_UNIQUE_IDS[tile])
 	run_count, files = parse_server_log(server_log_path, setup)
-	video_size = calculate_video_size(video_path, files)
+	video_size = calculate_video_size(video_path, output_path, files)
