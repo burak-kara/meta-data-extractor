@@ -1,144 +1,206 @@
 import sys
 import os
-import subprocess
-import xml.etree.ElementTree as ET
 
 SS = "\\"
 SLASH = "/"
 NEW_LINE = "\n"
+DASH = "-"
+
 VIDEOS = "videos"
 LOGS = "logs"
-VIDEO_NAME = "3secs_harbor"
-TILES = ["output-harbor-6x4", "output-harbor-8x6", "output-harbor-12x8"]
-# TILES = ["output-timelapse-6x4", "output-timelapse-8x6", "output-timelapse-12x8"]
-MPD_UNIQUE_IDS = [217, 433, 865]  # depending on the tile grid
-PROFILES = ["case9-omafv1-live", "case9-omafv2-live", "case9-omafv2-livezipped"]
-MPD_NAMES = ["omafv1.mpd", "omafv2.mpd", "omafv2.mpd"]
-BOXES = ["ftyp", "styp", "moof", "moov", "mdat", "imda"]
 
-SERVER_LOG = "server_out-15-09-2022-1650.log"
+HARBOR = "harbor"
+TIMELAPSE = "timelapse"
+OUTPUT = "output"
+MPD = 'mpd'
+
+TILES = ["6x4", "8x6", "12x8"]
+PROFILES = ["case9-omafv1-live", "case9-omafv2-live", "case9-omafv2-livezipped"]
+
+FTYP = 'ftyp'
+STYP = 'styp'
+MOOF = 'moof'
+MOOV = 'moov'
+MDAT = 'mdat'
+IMDA = 'imda'
+BOXES = [FTYP, STYP, MOOF, MOOV, MDAT, IMDA]
+
+
+def parse_box_info_file(file_path, sizes):
+	with open(file_path) as f:
+		lines = f.readlines()
+		for line_id in range(len(lines)):
+			if any(box in lines[line_id] for box in BOXES) and lines[line_id].find('-') != -1:
+				box_name = lines[line_id].split('-')[-1].strip()
+				if box_name in [FTYP, STYP]:
+					if file_path.find('v1') != -1:
+						if box_name == STYP:
+							sizes[STYP] += 40
+						elif box_name == FTYP:
+							sizes[FTYP] += 28
+					elif file_path.find('v2') != - 1:
+						if box_name == STYP:
+							if file_path.find('index') != -1:
+								sizes[STYP] += 20
+							else:
+								sizes[STYP] += 36
+						elif box_name == FTYP:
+							sizes[FTYP] += 36
+				elif lines[line_id + 1].find('size') != -1:
+					size = lines[line_id + 1].split(':')[1].strip()
+					sizes[box_name] += int(size)
+
+
+def append_results(original_index_box_sizes, sizes, compression_ratio):
+	for key in original_index_box_sizes:
+		original_index_box_sizes[key] *= compression_ratio
+		sizes[key] += original_index_box_sizes[key]
+
+
+def find_compression_ratio(original_index_path, index_path):
+	original_index_size = os.path.getsize(original_index_path)
+	index_size = os.path.getsize(index_path)
+	return index_size / original_index_size
+
+
+def handle_zipped_index_file(index_path, file_name, sizes):
+	original_index_path = index_path.replace('zipped', '')
+	original_index_output_path = original_index_path + SS + file_name[:-4] + "_info.txt"
+	original_index_box_sizes = {
+		FTYP: 0,
+		STYP: 0,
+		MOOF: 0,
+		MOOV: 0,
+		MDAT: 0,
+		IMDA: 0
+	}
+	parse_box_info_file(original_index_output_path, original_index_box_sizes)
+
+	compression_ratio = find_compression_ratio(original_index_path, index_path)
+	append_results(original_index_box_sizes, sizes, compression_ratio)
+
+
+def calculate_video_size(video_path, files):
+	sizes = {
+		FTYP: 0,
+		STYP: 0,
+		MOOF: 0,
+		MOOV: 0,
+		MDAT: 0,
+		IMDA: 0
+	}
+	for file_name in files:
+		file_path = video_path + SS + file_name
+		output_file_path = video_path + SS + file_name[:-4] + "_info.txt"
+
+		if file_name.find(MPD) != -1:
+			continue
+
+		if video_path.find('zipped') != -1 and file_name.find('index') != -1:
+			handle_zipped_index_file(video_path, file_name, sizes)
+			continue
+
+		if not os.path.isfile(output_file_path):
+			try:
+				os.system(
+					"python27.exe .\mp4viewer\src\showboxes.py -o stdout -c off {} > {}"
+					.format(file_path, output_file_path))
+			except Exception as e:
+				eprint(file_path, e)
+				continue
+		parse_box_info_file(output_file_path, sizes)
+	return sizes
 
 
 def eprint(*args, **kwargs):
 	print(*args, file=sys.stderr, **kwargs)
 
 
-def parse_server_log(file_path, run_setup):
-	run_count, files = 0, []
+def find_run_setup(line, run_setups):
+	for run_setup in run_setups:
+		if run_setup + SLASH in line:
+			return run_setup
+	return None
+
+
+def init_results(run_setups):
+	results = {}
+	for run_setup in run_setups:
+		results[run_setup] = {"run_count": 0, "files": []}
+	return results
+
+
+def parse_server_log(file_path, run_setups):
+	results = init_results(run_setups)
 	with open(file_path) as f:
 		lines = f.readlines()
 		for line in lines:
-			if line.find(run_setup) != -1:
+			run_setup = find_run_setup(line, run_setups)
+			if run_setup is not None:
 				try:
 					parsed = line.split()
-					if parsed[2].find("mpd") != -1:
-						run_count += 1
+					if parsed[2].find(MPD) != -1:
+						results[run_setup]["run_count"] += 1
 					file_name = parsed[2].split(SLASH)[3][:-6]
-					files.append(file_name)
+					results[run_setup]['files'].append(file_name)
 				except:
 					eprint("segment_bytes caused exception", file_path)
 					continue
-	return run_count, files
+	return results
 
 
-def calculate_video_size_with_mp4box(video_path, files):
-	sizes = {
-		"ftyp": 0,
-		"styp": 0,
-		"moof": 0,
-		"moov": 0,
-		"mdat": 0,
-		"imda": 0,
-	}
-	for file_name in files:
-		file_path = video_path + SS + file_name
-		xml_file_path = video_path + SS + file_name[:-4] + "_info.xml"
-
-		if file_name.find("mpd") != -1 or file_name.find("base") != -1:
-			continue
-
-		if not os.path.isfile(xml_file_path):
-			try:
-				os.system("mp4box.exe {} -diso".format(file_path))
-			except:
-				eprint("mp4box.exe caused exception", file_path)
-				continue
-		input_root = ET.parse(xml_file_path).getroot()
-
-		for box in input_root:
-			box_name = box.get('Type')
-			if box_name in sizes:
-				sizes[box_name] += int(box.get('Size'))
-	return sizes
+def get_run_setup(tile, profile):
+	return tile + SLASH + profile
 
 
-def parse_box_file(file_path, sizes):
-	with open(file_path) as f:
-		lines = f.readlines()
-		for line_id in range(len(lines)):
-			if any(box in lines[line_id] for box in BOXES) and lines[line_id].find('-') != -1:
-				box_name = lines[line_id].split('-')[-1].strip()
-				if box_name in ['ftyp', 'styp']:
-					if file_path.find('v1') != 1:
-						if box_name == 'styp':
-							sizes['styp'] += 40
-						elif box_name == 'ftyp':
-							sizes['ftyp'] += 28
-					elif file_path.find('v2') != 1:
-						if box_name == 'styp':
-							if file_path.find('index') != -1:
-								sizes['styp'] += 20
-							else:
-								sizes['styp'] += 36
-						elif box_name == 'ftyp':
-							sizes['ftyp'] += 36
-				elif lines[line_id + 1].find('size') != -1:
-					size = lines[line_id + 1].split(':')[1].strip()
-					sizes[box_name] += int(size)
+def get_tile_folder_name(video_name, tile_grid):
+	tile = OUTPUT + DASH
+	if TIMELAPSE in video_name:
+		tile += TIMELAPSE
+	else:
+		tile += HARBOR
+	return tile + DASH + tile_grid
 
-def calculate_video_size(video_path, files):
-	sizes = {
-		"ftyp": 0,
-		"styp": 0,
-		"moof": 0,
-		"moov": 0,
-		"mdat": 0,
-		"imda": 0,
-	}
-	for file_name in files:
-		file_path = video_path + SS + file_name
-		output_file_path = video_path + SS + file_name[:-4] + "_info.txt"
 
-		if file_name.find("mpd") != -1:
-			continue
+def build_setup_and_video_names(video_name):
+	run_setups = []
+	video_paths = []
+	for tile_grid in TILES:
+		tile = get_tile_folder_name(video_name, tile_grid)
+		for profile in PROFILES:
+			run_setups.append(get_run_setup(tile, profile))
+			video_paths.append(VIDEOS + SS + video_name + SS + tile + SS + profile)
+	return run_setups, video_paths
 
-		if not os.path.isfile(output_file_path):
-			try:
-				os.system(
-					"python27.exe .\mp4viewer\src\showboxes.py -o stdout -c off {} > {}".format(file_path,
-					                                                                            output_file_path))
-			except Exception as e:
-				eprint(file_path, e)
-				continue
-		parse_box_file(output_file_path, sizes)
-	return sizes
+
+def iterate_server_logs(server_logs, video_names):
+	for server_log, video_name in zip(server_logs, video_names):
+		run_setups, video_paths = build_setup_and_video_names(video_name)
+		video_files = parse_server_log(server_log, run_setups)
+		for video_path, profile in zip(video_paths, video_files.values()):
+			print(video_path)
+			sizes = calculate_video_size(video_path, profile['files'])
+			print(profile['run_count'], sizes, end='\n\n')
+		break
+
+
+def find_video_names(server_logs):
+	video_names = []
+	for server_log in server_logs:
+		video_names.append("_".join(server_log.split('_')[2:]).split('.lo')[0])
+	return video_names
+
+
+def find_server_logs():
+	server_logs = []
+	for root, dirs, files in os.walk(LOGS):
+		for file in files:
+			if file.find('server_out') != -1:
+				server_logs.append(root + SS + file)
+	return server_logs
 
 
 if __name__ == '__main__':
-	tile = 'output-harbor-6x4'
-	profile = 'case9-omafv2-livezipped'
-	# for tile in TILES:
-	# 	for profile in PROFILES:
-	print("tile: ", tile)
-	print("profile: ", profile)
-	video_path = VIDEOS + SS + VIDEO_NAME + SS + tile + SS + profile
-	output_path = VIDEOS + SS + VIDEO_NAME + SS + tile + SS + profile
-	server_log_path = LOGS + SS + SERVER_LOG
-	setup = tile + SLASH + profile + SLASH
-
-	# parse_mpd(video_path + SS + MPD_NAMES[profile], MPD_UNIQUE_IDS[tile])
-	run_count, files = parse_server_log(server_log_path, setup)
-	# video_size_with_mp4box = calculate_video_size_with_mp4box(video_path, files)
-	video_size = calculate_video_size(video_path, files)
-	# print(run_count, video_size_with_mp4box)
-	print(run_count, video_size)
+	server_logs = find_server_logs()
+	video_names = find_video_names(server_logs)
+	iterate_server_logs(server_logs, video_names)
