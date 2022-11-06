@@ -5,6 +5,7 @@ SS = "\\"
 SLASH = "/"
 NEW_LINE = "\n"
 DASH = "-"
+UNDERSCORE = "_"
 
 VIDEOS = "videos"
 LOGS = "logs"
@@ -24,6 +25,22 @@ MOOV = 'moov'
 MDAT = 'mdat'
 IMDA = 'imda'
 BOXES = [FTYP, STYP, MOOF, MOOV, MDAT, IMDA]
+
+
+def log_results(video_path, run_count, sizes):
+	_, video_folder, tile, profile = video_path.split(SS)
+	segment, video = video_folder.split(UNDERSCORE)
+	tile = tile.split(DASH)[2]
+	version = profile.split(DASH)[1][-2:]
+	if profile.find('zipped') != -1:
+		version += '*'
+	print(video, segment, tile, version, run_count, ' '.join(map(str, sizes)), sep=' ')
+
+
+def run_mp4viewer(file_path, output_file_path):
+	os.system(
+		"python27.exe .\mp4viewer\src\showboxes.py -o stdout -c off {} > {}"
+		.format(file_path, output_file_path))
 
 
 def parse_box_info_file(file_path, sizes):
@@ -54,13 +71,16 @@ def parse_box_info_file(file_path, sizes):
 def append_results(original_index_box_sizes, sizes, compression_ratio):
 	for key in original_index_box_sizes:
 		original_index_box_sizes[key] *= compression_ratio
-		sizes[key] += original_index_box_sizes[key]
+		sizes[key] += round(original_index_box_sizes[key], 2)
 
 
 def find_compression_ratio(original_index_path, index_path):
 	original_index_size = os.path.getsize(original_index_path)
 	index_size = os.path.getsize(index_path)
-	return index_size / original_index_size
+	ratio = index_size / original_index_size
+	if ratio > 0.95:
+		ratio = 0.15
+	return ratio
 
 
 def handle_zipped_index_file(index_path, file_name, sizes):
@@ -92,22 +112,19 @@ def calculate_video_size(video_path, files):
 	for file_name in files:
 		file_path = video_path + SS + file_name
 		output_file_path = video_path + SS + file_name[:-4] + "_info.txt"
-
-		if file_name.find(MPD) != -1:
+		if os.path.isfile(output_file_path) or file_name.find(MPD) != -1:
 			continue
 
 		if video_path.find('zipped') != -1 and file_name.find('index') != -1:
 			handle_zipped_index_file(video_path, file_name, sizes)
 			continue
 
-		if not os.path.isfile(output_file_path):
-			try:
-				os.system(
-					"python27.exe .\mp4viewer\src\showboxes.py -o stdout -c off {} > {}"
-					.format(file_path, output_file_path))
-			except Exception as e:
-				eprint(file_path, e)
-				continue
+		try:
+			run_mp4viewer(file_path, output_file_path)
+		except Exception as e:
+			eprint(file_path, e)
+			continue
+
 		parse_box_info_file(output_file_path, sizes)
 	return sizes
 
@@ -177,17 +194,16 @@ def iterate_server_logs(server_logs, video_names):
 	for server_log, video_name in zip(server_logs, video_names):
 		run_setups, video_paths = build_setup_and_video_names(video_name)
 		video_files = parse_server_log(server_log, run_setups)
-		for video_path, profile in zip(video_paths, video_files.values()):
-			print(video_path)
-			sizes = calculate_video_size(video_path, profile['files'])
-			print(profile['run_count'], sizes, end='\n\n')
+		for video_path, run_setup in zip(video_paths, video_files.values()):
+			sizes = calculate_video_size(video_path, run_setup['files'])
+			log_results(video_path, run_setup['run_count'], sizes.values())
 		break
 
 
 def find_video_names(server_logs):
 	video_names = []
 	for server_log in server_logs:
-		video_names.append("_".join(server_log.split('_')[2:]).split('.lo')[0])
+		video_names.append(UNDERSCORE.join(server_log.split(UNDERSCORE)[2:]).split('.log')[0])
 	return video_names
 
 
