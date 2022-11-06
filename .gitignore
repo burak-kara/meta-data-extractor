@@ -2,6 +2,9 @@
 
 videos/*
 logs/*
+/mp4viewer/*
+
 *.mp4
 *.mpd
 *.log
+*.xml
