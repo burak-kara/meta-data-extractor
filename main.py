@@ -1,5 +1,6 @@
 import sys
 import os
+import threading
 
 SS = "\\"
 SLASH = "/"
@@ -51,31 +52,6 @@ def run_mp4viewer(file_path, output_file_path):
 		.format(file_path, output_file_path))
 
 
-def parse_box_info_file(file_path, sizes):
-	with open(file_path) as f:
-		lines = f.readlines()
-		for line_id in range(len(lines)):
-			if any(box in lines[line_id] for box in BOXES) and lines[line_id].find('-') != -1:
-				box_name = lines[line_id].split('-')[-1].strip()
-				if box_name in [FTYP, STYP]:
-					if file_path.find('v1') != -1:
-						if box_name == STYP:
-							sizes[STYP] += 40
-						elif box_name == FTYP:
-							sizes[FTYP] += 28
-					elif file_path.find('v2') != - 1:
-						if box_name == STYP:
-							if file_path.find('index') != -1:
-								sizes[STYP] += 20
-							else:
-								sizes[STYP] += 36
-						elif box_name == FTYP:
-							sizes[FTYP] += 36
-				elif lines[line_id + 1].find('size') != -1:
-					size = lines[line_id + 1].split(':')[1].strip()
-					sizes[box_name] += int(size)
-
-
 def append_results(original_index_box_sizes, sizes, compression_ratio):
 	for key in original_index_box_sizes:
 		original_index_box_sizes[key] *= compression_ratio
@@ -89,6 +65,34 @@ def find_compression_ratio(original_index_path, index_path):
 	if ratio > 0.95:
 		ratio = 0.15
 	return ratio
+
+
+def parse_box_info_file(file_path, sizes):
+	try:
+		with open(file_path) as f:
+			lines = f.readlines()
+			for line_id in range(len(lines)):
+				if any(box in lines[line_id] for box in BOXES) and lines[line_id].find('-') != -1:
+					box_name = lines[line_id].split('-')[-1].strip()
+					if box_name in [FTYP, STYP]:
+						if file_path.find('v1') != -1:
+							if box_name == STYP:
+								sizes[STYP] += 40
+							elif box_name == FTYP:
+								sizes[FTYP] += 28
+						elif file_path.find('v2') != - 1:
+							if box_name == STYP:
+								if file_path.find('index') != -1:
+									sizes[STYP] += 20
+								else:
+									sizes[STYP] += 36
+							elif box_name == FTYP:
+								sizes[FTYP] += 36
+					elif lines[line_id + 1].find('size') != -1:
+						size = lines[line_id + 1].split(':')[1].strip()
+						sizes[box_name] += int(size)
+	except Exception as e:
+		eprint("index file is not available!")
 
 
 def handle_zipped_index_file(index_path, file_name, sizes):
@@ -200,13 +204,26 @@ def build_setup_and_video_names(video_name):
 	return run_setups, video_paths
 
 
+def start_thread(video_path, run_setup):
+	sizes = calculate_video_size(video_path, run_setup['files'])
+	log_results(video_path, run_setup['run_count'], sizes.values())
+
+
 def iterate_server_logs(server_logs, video_names):
 	for server_log, video_name in zip(server_logs, video_names):
 		run_setups, video_paths = build_setup_and_video_names(video_name)
 		video_files = parse_server_log(server_log, run_setups)
+		threads = []
 		for video_path, run_setup in zip(video_paths, video_files.values()):
-			sizes = calculate_video_size(video_path, run_setup['files'])
-			log_results(video_path, run_setup['run_count'], sizes.values())
+			thread = threading.Thread(target=start_thread, args=(video_path, run_setup))
+			threads.append(thread)
+
+		for tt in threads:
+			tt.start()
+
+		for tt in threads:
+			tt.join()
+		print('----------------------------------------')
 
 
 def find_video_names(server_logs):
