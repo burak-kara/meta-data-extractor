@@ -27,14 +27,22 @@ IMDA = 'imda'
 BOXES = [FTYP, STYP, MOOF, MOOV, MDAT, IMDA]
 
 
+def get_video_details(video_folder):
+	details = video_folder.split(UNDERSCORE)
+	if len(details) == 3:
+		return details[0], details[1], '20'
+	else:
+		return details[0], details[1], '50'
+
+
 def log_results(video_path, run_count, sizes):
 	_, video_folder, tile, profile = video_path.split(SS)
-	segment, video = video_folder.split(UNDERSCORE)
+	segment, video, resolution = get_video_details(video_folder)
 	tile = tile.split(DASH)[2]
 	version = profile.split(DASH)[1][-2:]
 	if profile.find('zipped') != -1:
 		version += '*'
-	print(video, segment, tile, version, run_count, ' '.join(map(str, sizes)), sep=' ')
+	print(video, segment, resolution, tile, version, run_count, ' '.join(map(str, sizes)), sep=' ')
 
 
 def run_mp4viewer(file_path, output_file_path):
@@ -112,18 +120,20 @@ def calculate_video_size(video_path, files):
 	for file_name in files:
 		file_path = video_path + SS + file_name
 		output_file_path = video_path + SS + file_name[:-4] + "_info.txt"
-		if os.path.isfile(output_file_path) or file_name.find(MPD) != -1:
+
+		if file_name.find(MPD) != -1:
 			continue
 
 		if video_path.find('zipped') != -1 and file_name.find('index') != -1:
 			handle_zipped_index_file(video_path, file_name, sizes)
 			continue
 
-		try:
-			run_mp4viewer(file_path, output_file_path)
-		except Exception as e:
-			eprint(file_path, e)
-			continue
+		if not os.path.isfile(output_file_path):
+			try:
+				run_mp4viewer(file_path, output_file_path)
+			except Exception as e:
+				eprint(file_path, e)
+				continue
 
 		parse_box_info_file(output_file_path, sizes)
 	return sizes
@@ -197,7 +207,6 @@ def iterate_server_logs(server_logs, video_names):
 		for video_path, run_setup in zip(video_paths, video_files.values()):
 			sizes = calculate_video_size(video_path, run_setup['files'])
 			log_results(video_path, run_setup['run_count'], sizes.values())
-		break
 
 
 def find_video_names(server_logs):
