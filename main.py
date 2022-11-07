@@ -27,6 +27,8 @@ MDAT = 'mdat'
 IMDA = 'imda'
 BOXES = [FTYP, STYP, MOOF, MOOV, MDAT, IMDA]
 
+RESULTS = []
+
 
 def get_video_details(video_folder):
 	details = video_folder.split(UNDERSCORE)
@@ -36,14 +38,16 @@ def get_video_details(video_folder):
 		return details[0], details[1], '50'
 
 
-def log_results(video_path, http_version, run_count, sizes):
+def log_results(video_path, run_binary, run_setup, sizes):
 	_, video_folder, tile, profile = video_path.split(SS)
 	segment, video, resolution = get_video_details(video_folder)
 	tile = tile.split(DASH)[2]
 	omaf_version = profile.split(DASH)[1][-2:]
 	if profile.find('zipped') != -1:
 		omaf_version += '*'
-	print(video, segment, resolution, tile, omaf_version, http_version, run_count, ' '.join(map(str, sizes)), sep=' ')
+	log = ' '.join([video, segment, resolution, tile, omaf_version, run_binary, str(run_setup['run_count']), ' '.join(map(str, sizes))])
+	print(log)
+	RESULTS.append(log)
 
 
 def run_mp4viewer(file_path, output_file_path):
@@ -222,7 +226,7 @@ def build_setup_and_video_names(video_name):
 
 def start_thread(video_path, run_setup, run_binary):
 	sizes = calculate_video_size(video_path, run_setup['files'])
-	log_results(video_path, run_binary, run_setup['run_count'], sizes.values())
+	return log_results(video_path, run_binary, run_setup, sizes.values())
 
 
 def iterate_server_logs(server_logs, video_names):
@@ -240,7 +244,7 @@ def iterate_server_logs(server_logs, video_names):
 
 			for tt in threads:
 				tt.join()
-			print('----------------------------------------')
+			print('run_binary: {}, video_name: {} is done'.format(run_binary, video_name))
 
 
 def find_video_names(server_logs):
@@ -263,3 +267,4 @@ if __name__ == '__main__':
 	server_logs = find_server_logs()
 	video_names = find_video_names(server_logs)
 	iterate_server_logs(server_logs, video_names)
+	print(RESULTS)
