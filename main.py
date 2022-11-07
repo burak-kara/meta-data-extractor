@@ -36,14 +36,14 @@ def get_video_details(video_folder):
 		return details[0], details[1], '50'
 
 
-def log_results(video_path, run_count, sizes):
+def log_results(video_path, http_version, run_count, sizes):
 	_, video_folder, tile, profile = video_path.split(SS)
 	segment, video, resolution = get_video_details(video_folder)
 	tile = tile.split(DASH)[2]
-	version = profile.split(DASH)[1][-2:]
+	omaf_version = profile.split(DASH)[1][-2:]
 	if profile.find('zipped') != -1:
-		version += '*'
-	print(video, segment, resolution, tile, version, run_count, ' '.join(map(str, sizes)), sep=' ')
+		omaf_version += '*'
+	print(video, segment, resolution, tile, omaf_version, http_version, run_count, ' '.join(map(str, sizes)), sep=' ')
 
 
 def run_mp4viewer(file_path, output_file_path):
@@ -154,28 +154,44 @@ def find_run_setup(line, run_setups):
 	return None
 
 
-def init_results(run_setups):
+def find_run_binaries(line):
+	run_binaries = []
+	binaries = line.split(DASH)
+	for binary in binaries:
+		if binary.find("player2") != -1:
+			run_binaries.append("H2")
+		elif binary.find("player") != -1:
+			run_binaries.append("H1")
+	return run_binaries
+
+
+def init_results(run_setups, run_binaries):
 	results = {}
-	for run_setup in run_setups:
-		results[run_setup] = {"run_count": 0, "files": []}
+	for run_binary in run_binaries:
+		results[run_binary] = {}
+		for run_setup in run_setups:
+			results[run_binary][run_setup] = {"run_count": 0, "files": []}
 	return results
 
 
 def parse_server_log(file_path, run_setups):
-	results = init_results(run_setups)
 	with open(file_path) as f:
 		lines = f.readlines()
+		run_binaries = find_run_binaries(lines[0])
+		results = init_results(run_setups, run_binaries)
+		run_binary = -1
 		for line in lines:
 			run_setup = find_run_setup(line, run_setups)
 			if run_setup is not None:
 				try:
 					parsed = line.split()
 					if parsed[2].find(MPD) != -1:
-						results[run_setup]["run_count"] += 1
+						run_binary = (run_binary + 1) % len(run_binaries)
+						results[run_binaries[run_binary]][run_setup]["run_count"] += 1
 					file_name = parsed[2].split(SLASH)[3][:-6]
-					results[run_setup]['files'].append(file_name)
-				except:
-					eprint("segment_bytes caused exception", file_path)
+					results[run_binaries[run_binary]][run_setup]['files'].append(file_name)
+				except Exception as e:
+					eprint("segment_bytes caused exception", file_path, e)
 					continue
 	return results
 
@@ -204,26 +220,27 @@ def build_setup_and_video_names(video_name):
 	return run_setups, video_paths
 
 
-def start_thread(video_path, run_setup):
+def start_thread(video_path, run_setup, run_binary):
 	sizes = calculate_video_size(video_path, run_setup['files'])
-	log_results(video_path, run_setup['run_count'], sizes.values())
+	log_results(video_path, run_binary, run_setup['run_count'], sizes.values())
 
 
 def iterate_server_logs(server_logs, video_names):
 	for server_log, video_name in zip(server_logs, video_names):
 		run_setups, video_paths = build_setup_and_video_names(video_name)
 		video_files = parse_server_log(server_log, run_setups)
-		threads = []
-		for video_path, run_setup in zip(video_paths, video_files.values()):
-			thread = threading.Thread(target=start_thread, args=(video_path, run_setup))
-			threads.append(thread)
+		for run_binary in video_files:
+			threads = []
+			for video_path, run_setup in zip(video_paths, video_files[run_binary].values()):
+				thread = threading.Thread(target=start_thread, args=(video_path, run_setup, run_binary))
+				threads.append(thread)
 
-		for tt in threads:
-			tt.start()
+			for tt in threads:
+				tt.start()
 
-		for tt in threads:
-			tt.join()
-		print('----------------------------------------')
+			for tt in threads:
+				tt.join()
+			print('----------------------------------------')
 
 
 def find_video_names(server_logs):
