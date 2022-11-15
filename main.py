@@ -8,17 +8,23 @@ NEW_LINE = "\n"
 DASH = "-"
 UNDERSCORE = "_"
 
+# The name of the folder where the videos are stored
 VIDEOS = "videos"
+# The name of the folder where the server logs are stored
 LOGS = "logs"
-
+# The name of the first video
 HARBOR = "harbor"
+# The name of the second video
 TIMELAPSE = "timelapse"
 OUTPUT = "output"
 MPD = 'mpd'
 
+# Available tile grids
 TILES = ["6x4", "8x6", "12x8"]
+# Available stream profiles
 PROFILES = ["case9-omafv1-live", "case9-omafv2-live", "case9-omafv2-livezipped"]
 
+# ISOBMFF boxes
 FTYP = 'ftyp'
 STYP = 'styp'
 MOOF = 'moof'
@@ -45,7 +51,8 @@ def log_results(video_path, run_binary, run_setup, sizes):
 	omaf_version = profile.split(DASH)[1][-2:]
 	if profile.find('zipped') != -1:
 		omaf_version += '*'
-	log = ' '.join([video, segment, resolution, tile, omaf_version, run_binary, str(run_setup['run_count']), ' '.join(map(str, sizes))])
+	log = ' '.join([video, segment, resolution, tile, omaf_version, run_binary, str(run_setup['run_count']),
+	                ' '.join(map(str, sizes))])
 	print(log)
 	RESULTS.append(log)
 
@@ -147,6 +154,26 @@ def calculate_video_size(video_path, files):
 	return sizes
 
 
+def start_thread(video_path, run_setup, run_binary):
+	sizes = calculate_video_size(video_path, run_setup['files'])
+	return log_results(video_path, run_binary, run_setup, sizes.values())
+
+
+def iterate_video_files(video_files, video_paths, video_name):
+	for run_binary in video_files:
+		threads = []
+		for video_path, run_setup in zip(video_paths, video_files[run_binary].values()):
+			thread = threading.Thread(target=start_thread, args=(video_path, run_setup, run_binary))
+			threads.append(thread)
+
+		for tt in threads:
+			tt.start()
+
+		for tt in threads:
+			tt.join()
+		print('run_binary: {}, video_name: {} is done'.format(run_binary, video_name))
+
+
 def eprint(*args, **kwargs):
 	print(*args, file=sys.stderr, **kwargs)
 
@@ -158,6 +185,15 @@ def find_run_setup(line, run_setups):
 	return None
 
 
+def init_results(run_setups, run_binaries):
+	results = {}
+	for run_binary in run_binaries:
+		results[run_binary] = {}
+		for run_setup in run_setups:
+			results[run_binary][run_setup] = {"run_count": 0, "files": []}
+	return results
+
+
 def find_run_binaries(line):
 	run_binaries = []
 	binaries = line.split(DASH)
@@ -167,15 +203,6 @@ def find_run_binaries(line):
 		elif binary.find("player") != -1:
 			run_binaries.append("H1")
 	return run_binaries
-
-
-def init_results(run_setups, run_binaries):
-	results = {}
-	for run_binary in run_binaries:
-		results[run_binary] = {}
-		for run_setup in run_setups:
-			results[run_binary][run_setup] = {"run_count": 0, "files": []}
-	return results
 
 
 def parse_server_log(file_path, run_setups):
@@ -214,8 +241,7 @@ def get_tile_folder_name(video_name, tile_grid):
 
 
 def build_setup_and_video_names(video_name):
-	run_setups = []
-	video_paths = []
+	run_setups, video_paths = [], []
 	for tile_grid in TILES:
 		tile = get_tile_folder_name(video_name, tile_grid)
 		for profile in PROFILES:
@@ -224,27 +250,11 @@ def build_setup_and_video_names(video_name):
 	return run_setups, video_paths
 
 
-def start_thread(video_path, run_setup, run_binary):
-	sizes = calculate_video_size(video_path, run_setup['files'])
-	return log_results(video_path, run_binary, run_setup, sizes.values())
-
-
 def iterate_server_logs(server_logs, video_names):
 	for server_log, video_name in zip(server_logs, video_names):
 		run_setups, video_paths = build_setup_and_video_names(video_name)
 		video_files = parse_server_log(server_log, run_setups)
-		for run_binary in video_files:
-			threads = []
-			for video_path, run_setup in zip(video_paths, video_files[run_binary].values()):
-				thread = threading.Thread(target=start_thread, args=(video_path, run_setup, run_binary))
-				threads.append(thread)
-
-			for tt in threads:
-				tt.start()
-
-			for tt in threads:
-				tt.join()
-			print('run_binary: {}, video_name: {} is done'.format(run_binary, video_name))
+		iterate_video_files(video_files, video_paths, video_name)
 
 
 def find_video_names(server_logs):
@@ -254,7 +264,7 @@ def find_video_names(server_logs):
 	return video_names
 
 
-def find_server_logs():
+def find_server_log_files():
 	server_logs = []
 	for root, dirs, files in os.walk(LOGS):
 		for file in files:
@@ -264,7 +274,7 @@ def find_server_logs():
 
 
 if __name__ == '__main__':
-	server_logs = find_server_logs()
+	server_logs = find_server_log_files()
 	video_names = find_video_names(server_logs)
 	iterate_server_logs(server_logs, video_names)
 	print(RESULTS)
